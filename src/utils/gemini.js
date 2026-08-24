@@ -23,6 +23,8 @@ let groqConversationHistory = [];
 
 // Conversation tracking variables
 let currentSessionId = null;
+const MIN_TRANSCRIPTION_LENGTH = 4;
+
 let currentTranscription = '';
 let conversationHistory = [];
 let screenAnalysisHistory = [];
@@ -218,7 +220,8 @@ function sendFinalTranscriptionToGroq() {
     }
 
     const transcription = currentTranscription.trim();
-    if (transcription === '') {
+    // Skip stray VAD fragments ("Ну", "И") - not worth a Groq request.
+    if (transcription.length < MIN_TRANSCRIPTION_LENGTH) {
         return;
     }
 
@@ -674,7 +677,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     console.log('----------------', message);
                     logTransportEvent('gemini.live.message', message);
 
-                    // Handle input transcription (what was spoken)
+                    // Accumulate input transcription (what was spoken); the
+                    // Groq request fires once per turn at the end markers below.
                     if (message.serverContent?.inputTranscription?.results) {
                         currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
                     } else if (message.serverContent?.inputTranscription?.text) {
@@ -684,10 +688,6 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         }
                     }
 
-                    if (message.serverContent?.inputTranscription) {
-                        sendFinalTranscriptionToGroq();
-                    }
-
                     if (!hasGroqKey() && message.serverContent?.outputTranscription?.text) {
                         const isFirstChunk = messageBuffer === '';
                         messageBuffer += message.serverContent.outputTranscription.text;
@@ -695,6 +695,10 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     }
 
                     if (message.serverContent?.generationComplete) {
+                        // By this point the full user utterance for the turn has
+                        // been transcribed - send it once instead of per-fragment.
+                        sendFinalTranscriptionToGroq();
+
                         if (currentTranscription.trim() !== '') {
                             if (!hasGroqKey() && messageBuffer.trim() !== '') {
                                 saveConversationTurn(currentTranscription, messageBuffer);
@@ -705,6 +709,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     }
 
                     if (message.serverContent?.turnComplete) {
+                        // Safety net: flush if generationComplete never arrived.
+                        sendFinalTranscriptionToGroq();
                         currentTranscription = '';
                         messageBuffer = '';
                         groqRequestStartedForTurn = false;
@@ -745,6 +751,15 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                 responseModalities: [Modality.AUDIO],
                 proactivity: { proactiveAudio: true },
                 outputAudioTranscription: {},
+                realtimeInputConfig: {
+                    automaticActivityDetection: {
+                        disabled: false,
+                        // Require ~1.2s of silence before committing a turn so
+                        // natural mid-sentence pauses don't split the utterance.
+                        silenceDurationMs: 1200,
+                        prefixPaddingMs: 100,
+                    },
+                },
                 tools: enabledTools,
                 // Enable speaker diarization
                 inputAudioTranscription: {
