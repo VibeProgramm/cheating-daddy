@@ -758,6 +758,12 @@ export class MainView extends LitElement {
             const storedMode = prefs.providerMode || 'byok';
             this._mode = storedMode === 'cloud' ? 'byok' : storedMode;
 
+            // Local AI is not available on Linux yet - fall back to BYOK
+            if (cheatingDaddy.isLinux && this._mode === 'local') {
+                this._mode = 'byok';
+                await cheatingDaddy.storage.updatePreference('providerMode', 'byok');
+            }
+
             if (storedMode === 'cloud') {
                 await cheatingDaddy.storage.updatePreference('providerMode', this._mode);
             }
@@ -915,6 +921,10 @@ export class MainView extends LitElement {
     // ── Persistence ──
 
     async _saveMode(mode) {
+        if (cheatingDaddy.isLinux && mode === 'local') {
+            console.warn('Local AI is not available on Linux');
+            return;
+        }
         this._mode = mode;
         this._tokenError = false;
         this._keyError = false;
@@ -1237,9 +1247,15 @@ export class MainView extends LitElement {
 
             <!-- Cloud promo intentionally removed from the active UI. -->
 
-            <div class="mode-links">
-                <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
-            </div>
+            ${
+                cheatingDaddy.isLinux
+                    ? ''
+                    : html`
+                          <div class="mode-links">
+                              <button class="mode-link" @click=${() => this._saveMode('local')}>Use local AI</button>
+                          </div>
+                      `
+            }
         `;
     }
 

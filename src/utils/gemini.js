@@ -6,6 +6,7 @@ const { getSystemPrompt } = require('./prompts');
 const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getConfig } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { startTransportLog, logTransportEvent, closeTransportLog } = require('./transportLogger');
+const linuxAudio = require('./linuxAudio');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -866,6 +867,22 @@ function killExistingSystemAudioDump() {
     });
 }
 
+function dispatchSystemAudioChunk(monoChunk, geminiSessionRef) {
+    if (currentProviderMode === 'cloud') {
+        sendCloudAudio(monoChunk);
+    } else if (currentProviderMode === 'local') {
+        getLocalAi().processLocalAudio(monoChunk);
+    } else {
+        const base64Data = monoChunk.toString('base64');
+        sendAudioToGemini(base64Data, geminiSessionRef);
+    }
+
+    if (process.env.DEBUG_AUDIO) {
+        console.log(`Processed audio chunk: ${monoChunk.length} bytes`);
+        saveDebugAudio(monoChunk, 'system_audio');
+    }
+}
+
 async function startMacOSAudioCapture(geminiSessionRef) {
     if (process.platform !== 'darwin') return false;
 
@@ -919,19 +936,7 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
             const monoChunk = CHANNELS === 2 ? convertStereoToMono(chunk) : chunk;
 
-            if (currentProviderMode === 'cloud') {
-                sendCloudAudio(monoChunk);
-            } else if (currentProviderMode === 'local') {
-                getLocalAi().processLocalAudio(monoChunk);
-            } else {
-                const base64Data = monoChunk.toString('base64');
-                sendAudioToGemini(base64Data, geminiSessionRef);
-            }
-
-            if (process.env.DEBUG_AUDIO) {
-                console.log(`Processed audio chunk: ${chunk.length} bytes`);
-                saveDebugAudio(monoChunk, 'system_audio');
-            }
+            dispatchSystemAudioChunk(monoChunk, geminiSessionRef);
         }
 
         const maxBufferSize = SAMPLE_RATE * BYTES_PER_SAMPLE * 1;
@@ -1276,9 +1281,41 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         }
     });
 
+    ipcMain.handle('start-linux-audio', async (event, options = {}) => {
+        if (process.platform !== 'linux') {
+            return { success: false, error: 'Linux audio capture only available on Linux' };
+        }
+
+        try {
+            return await linuxAudio.startLinuxAudioCapture({
+                mode: options.mode === 'intercept' ? 'intercept' : 'tap',
+                onChunk: chunk => dispatchSystemAudioChunk(chunk, geminiSessionRef),
+                onStatus: (level, message) => {
+                    if (level === 'error' || level === 'warning') {
+                        sendToRenderer('update-status', `Audio: ${message}`);
+                    }
+                },
+            });
+        } catch (error) {
+            console.error('Error starting Linux audio capture:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('stop-linux-audio', async event => {
+        try {
+            await linuxAudio.stopLinuxAudioCapture();
+            return { success: true };
+        } catch (error) {
+            console.error('Error stopping Linux audio capture:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('close-session', async event => {
         try {
             stopMacOSAudioCapture();
+            await linuxAudio.stopLinuxAudioCapture();
 
             if (currentProviderMode === 'cloud') {
                 closeCloud();
@@ -1358,6 +1395,7 @@ module.exports = {
     startMacOSAudioCapture,
     convertStereoToMono,
     stopMacOSAudioCapture,
+    stopLinuxAudioCapture: linuxAudio.stopLinuxAudioCapture,
     sendAudioToGemini,
     sendImageToGeminiHttp,
     setupGeminiIpcHandlers,

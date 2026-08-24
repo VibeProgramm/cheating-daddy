@@ -1,10 +1,20 @@
+// Prevent uncaught EPIPE crashes when stdout/stderr pipes are closed
+// (e.g. app launched from a desktop entry or a pipe whose reader exited)
+for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', error => {
+        if (error && error.code === 'EPIPE') return;
+        throw error;
+    });
+}
+
 if (require('electron-squirrel-startup')) {
     process.exit(0);
 }
 
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
-const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
+const { setupGeminiIpcHandlers, stopMacOSAudioCapture, stopLinuxAudioCapture, sendToRenderer } = require('./utils/gemini');
+const linuxAudio = require('./utils/linuxAudio');
 const storage = require('./storage');
 
 const geminiSessionRef = { current: null };
@@ -18,6 +28,13 @@ function createMainWindow() {
 app.whenReady().then(async () => {
     // Initialize storage (checks version, resets if needed)
     storage.initializeStorage();
+
+    // Clean up leftover interception modules from a crashed previous session
+    if (process.platform === 'linux') {
+        linuxAudio.recoverStaleInterception().catch(error => {
+            console.warn('Interception recovery failed:', error.message);
+        });
+    }
 
     // Trigger screen recording permission prompt on macOS if not already granted
     if (process.platform === 'darwin') {
@@ -33,6 +50,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
     stopMacOSAudioCapture();
+    stopLinuxAudioCapture();
     if (process.platform !== 'darwin') {
         app.quit();
     }
@@ -40,6 +58,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     stopMacOSAudioCapture();
+    stopLinuxAudioCapture();
     require('./utils/localai').closeLocalSession();
 });
 
@@ -267,6 +286,7 @@ function setupGeneralIpcHandlers() {
     ipcMain.handle('quit-application', async event => {
         try {
             stopMacOSAudioCapture();
+            stopLinuxAudioCapture();
             app.quit();
             return { success: true };
         } catch (error) {
