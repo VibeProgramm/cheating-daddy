@@ -102,6 +102,9 @@ async function unloadModulesForTapSink() {
 
 async function setupInterception() {
     const realSink = await getDefaultSink();
+    // Record before switching so restoreInterception can always put the
+    // user's sink back, regardless of which call site started interception.
+    originalDefaultSink = realSink;
 
     await unloadModulesForTapSink();
 
