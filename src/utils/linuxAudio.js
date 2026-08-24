@@ -488,7 +488,15 @@ function startSinkPolling() {
             const currentDefault = await getDefaultSink();
             if (isIntercepting) {
                 if (currentDefault !== TAP_SINK_NAME && currentDefault !== loopbackSink) {
+                    // The user picked a new output while intercepting - remember
+                    // it as the real sink to restore and re-assert the tap so
+                    // capture keeps working.
+                    originalDefaultSink = currentDefault;
                     await rePointLoopback(currentDefault);
+                    const switched = await setDefaultSinkVerified(TAP_SINK_NAME);
+                    if (!switched) {
+                        emitStatus('warning', 'Could not re-assert tap sink after output change');
+                    }
                 }
             } else if (currentDefault !== capturedSink) {
                 emitStatus('info', `Default sink changed to ${currentDefault} - restarting capture`);

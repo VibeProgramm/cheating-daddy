@@ -19,6 +19,8 @@ const storage = require('./storage');
 
 const geminiSessionRef = { current: null };
 let mainWindow = null;
+let quitCleanupStarted = false;
+let quitCleanupSettled = false;
 
 function createMainWindow() {
     mainWindow = createWindow(sendToRenderer, geminiSessionRef);
@@ -50,16 +52,35 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
     stopMacOSAudioCapture();
-    stopLinuxAudioCapture();
+    // Linux audio cleanup is awaited in before-quit
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
     stopMacOSAudioCapture();
-    stopLinuxAudioCapture();
     require('./utils/localai').closeLocalSession();
+
+    if (quitCleanupStarted) {
+        // A second quit trigger while cleanup is still running must not let
+        // Electron exit before the sink restore settles.
+        if (!quitCleanupSettled) event.preventDefault();
+        return;
+    }
+
+    // Restoring the default sink and unloading interception modules is async.
+    // Defer quitting until it settles, otherwise the process can exit first
+    // and leave the virtual sink as default with no audible output.
+    quitCleanupStarted = true;
+    event.preventDefault();
+    const cleanup = process.platform === 'linux' ? stopLinuxAudioCapture() : Promise.resolve();
+    cleanup
+        .catch(error => console.error('Error during quit audio cleanup:', error))
+        .finally(() => {
+            quitCleanupSettled = true;
+            app.quit();
+        });
 });
 
 app.on('activate', () => {
@@ -285,8 +306,7 @@ function setupGeneralIpcHandlers() {
 
     ipcMain.handle('quit-application', async event => {
         try {
-            stopMacOSAudioCapture();
-            stopLinuxAudioCapture();
+            // Async audio cleanup is handled by the before-quit handler
             app.quit();
             return { success: true };
         } catch (error) {

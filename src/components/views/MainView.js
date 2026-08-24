@@ -761,11 +761,19 @@ export class MainView extends LitElement {
             // Local AI is not available on Linux yet - fall back to BYOK
             if (cheatingDaddy.isLinux && this._mode === 'local') {
                 this._mode = 'byok';
-                await cheatingDaddy.storage.updatePreference('providerMode', 'byok');
+                try {
+                    await cheatingDaddy.storage.updatePreference('providerMode', 'byok');
+                } catch (error) {
+                    console.warn('Could not persist Linux provider-mode migration:', error);
+                }
             }
 
             if (storedMode === 'cloud') {
-                await cheatingDaddy.storage.updatePreference('providerMode', this._mode);
+                try {
+                    await cheatingDaddy.storage.updatePreference('providerMode', this._mode);
+                } catch (error) {
+                    console.warn('Could not persist cloud-mode migration:', error);
+                }
             }
 
             // Load keys

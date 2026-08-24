@@ -867,14 +867,14 @@ function killExistingSystemAudioDump() {
     });
 }
 
-function dispatchSystemAudioChunk(monoChunk, geminiSessionRef) {
+async function dispatchSystemAudioChunk(monoChunk, geminiSessionRef) {
     if (currentProviderMode === 'cloud') {
         sendCloudAudio(monoChunk);
     } else if (currentProviderMode === 'local') {
         getLocalAi().processLocalAudio(monoChunk);
     } else {
         const base64Data = monoChunk.toString('base64');
-        sendAudioToGemini(base64Data, geminiSessionRef);
+        await sendAudioToGemini(base64Data, geminiSessionRef);
     }
 
     if (process.env.DEBUG_AUDIO) {

@@ -346,6 +346,16 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
         console.log('Manual mode enabled - screenshots will be captured on demand only');
     } catch (err) {
         console.error('Error starting capture:', err);
+        // If system audio capture already started, stop it so we don't keep
+        // recording - and in intercept mode holding the default sink on the
+        // virtual tap - with no UI running.
+        if (isLinux) {
+            try {
+                await ipcRenderer.invoke('stop-linux-audio');
+            } catch (cleanupError) {
+                console.warn('Failed to stop Linux audio after capture error:', cleanupError);
+            }
+        }
         cheatingDaddy.setStatus('error');
     }
 }
